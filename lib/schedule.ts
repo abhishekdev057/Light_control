@@ -136,6 +136,13 @@ export function isScheduleActive(schedule: RelayScheduleConfig, now = new Date()
   return currentMinutes >= start || currentMinutes < end;
 }
 
+export function isManualControlLocked(
+  schedule: RelayScheduleConfig,
+  now = new Date(),
+) {
+  return schedule.enabled && isScheduleActive(schedule, now);
+}
+
 export function getNextScheduleTransitionAt(
   schedule: RelayScheduleConfig,
   now = new Date(),
@@ -243,11 +250,14 @@ export function buildScheduleSummary(
   override: RelayManualOverride,
   now = new Date(),
 ): RelayScheduleSummary {
+  const active = isScheduleActive(schedule, now);
+
   return {
     ...schedule,
-    active: isScheduleActive(schedule, now),
+    active,
     nextTransitionAt: getNextScheduleTransitionAt(schedule, now),
     overrideUntil: isOverrideActive(override, now) ? override.expiresAt : null,
     controlSource: resolveRelaySource(schedule, override, now),
+    manualLocked: schedule.enabled && active,
   };
 }

@@ -3,11 +3,11 @@
 #include <HTTPClient.h>
 
 // Replace these values before uploading.
-const char *WIFI_SSID = "YOUR_WIFI_SSID";
-const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char *BASE_URL = "https://your-project-name.vercel.app";
+const char *WIFI_SSID = "AirFiber-5g";
+const char *WIFI_PASSWORD = "chalalowifi";
+const char *BASE_URL = "https://light-control-five.vercel.app";
 const char *DEVICE_ID = "esp32-relay-01";
-const char *DEVICE_TOKEN = "your_device_secret_here";
+const char *DEVICE_TOKEN = "Justdevice";
 
 constexpr int RELAY26_PIN = 26;
 constexpr int RELAY27_PIN = 27;

@@ -6,7 +6,6 @@ import { useEffect, useState, useTransition } from "react";
 import { ADMIN_TOKEN_STORAGE_KEY } from "@/lib/constants";
 import {
   fetchDashboardState,
-  postRelayGroup,
   postRelaySchedule,
   postRelayState,
 } from "@/lib/client/dashboard-api";
@@ -52,6 +51,7 @@ const fallbackSnapshot: DashboardStateResponse = {
     nextTransitionAt: null,
     overrideUntil: null,
     controlSource: "manual",
+    manualLocked: false,
   },
   relay27Schedule: {
     enabled: false,
@@ -63,6 +63,7 @@ const fallbackSnapshot: DashboardStateResponse = {
     nextTransitionAt: null,
     overrideUntil: null,
     controlSource: "manual",
+    manualLocked: false,
   },
 };
 
@@ -96,24 +97,24 @@ function buildScheduleDrafts(
 
 function formatDateTime(value: string | null) {
   if (!value) {
-    return "Waiting for device activity";
+    return "No data";
   }
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return "Invalid timestamp";
+    return "Invalid";
   }
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
-    timeStyle: "medium",
+    timeStyle: "short",
   }).format(date);
 }
 
 function formatRelativeTime(value: string | null) {
   if (!value) {
-    return "No heartbeat yet";
+    return "No heartbeat";
   }
 
   const date = new Date(value);
@@ -145,76 +146,117 @@ function formatRelativeTime(value: string | null) {
   return rtf.format(Math.round(diffHours / 24), "day");
 }
 
-function describeRelay(value: boolean | null) {
-  if (value === null) {
-    return "Not reported";
-  }
-
-  return value ? "ON" : "OFF";
-}
-
 function describeSource(source: DashboardStateResponse["relay26Source"]) {
   if (source === "manual-override") {
     return "Manual override";
   }
 
   if (source === "schedule") {
-    return "Schedule";
+    return "Scheduled";
   }
 
   return "Manual";
 }
 
-function SurfaceCard({
-  children,
-  className = "",
-}: Readonly<{ children: React.ReactNode; className?: string }>) {
-  return (
-    <section
-      className={`rounded-[28px] border border-line/80 bg-panel-strong/85 p-5 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur ${className}`}
-    >
-      {children}
-    </section>
-  );
+function describeReported(value: boolean | null) {
+  if (value === null) {
+    return "No report";
+  }
+
+  return value ? "ON" : "OFF";
 }
 
-function StatusBadge({ online }: Readonly<{ online: boolean }>) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] ${
-        online
-          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
-          : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-      }`}
-    >
-      {online ? "Online" : "Offline"}
-    </span>
-  );
+function cardClass(extra = "") {
+  return `rounded-[26px] border border-line/80 bg-panel-strong/90 p-5 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur ${extra}`;
 }
 
-function StatePill({
+function statusBadgeClass(active: boolean) {
+  return active
+    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+    : "bg-slate-500/12 text-slate-700 dark:text-slate-300";
+}
+
+function StatTile({
   label,
   value,
-  tone = "neutral",
 }: Readonly<{
   label: string;
   value: string;
-  tone?: "neutral" | "accent" | "warn";
 }>) {
-  const toneClass =
-    tone === "accent"
-      ? "bg-accent/12 text-accent"
-      : tone === "warn"
-        ? "bg-amber-500/12 text-amber-700 dark:text-amber-300"
-        : "bg-black/5 text-foreground/75 dark:bg-white/8";
-
   return (
-    <div className={`rounded-2xl px-3 py-2 ${toneClass}`}>
-      <p className="text-[11px] uppercase tracking-[0.24em] text-foreground/55">
+    <div className="rounded-2xl border border-line/70 bg-background/65 px-4 py-3">
+      <p className="text-[11px] uppercase tracking-[0.24em] text-foreground/45">
         {label}
       </p>
-      <p className="mt-1 text-sm font-semibold">{value}</p>
+      <p className="mt-2 text-sm font-semibold text-foreground">{value}</p>
     </div>
+  );
+}
+
+function BulbIcon({ isOn }: Readonly<{ isOn: boolean }>) {
+  return (
+    <div className="relative flex h-20 w-20 items-center justify-center">
+      {isOn ? (
+        <div className="absolute inset-2 rounded-full bg-amber-300/40 blur-2xl" />
+      ) : null}
+      <div
+        className={`relative flex h-16 w-16 items-center justify-center rounded-full border ${
+          isOn
+            ? "border-amber-400/70 bg-amber-100/80 text-amber-500"
+            : "border-line/80 bg-background/80 text-foreground/45"
+        }`}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className="h-8 w-8"
+          fill={isOn ? "currentColor" : "none"}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M9 18h6" />
+          <path d="M10 22h4" />
+          <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1.1 2H15c.1-.8.5-1.5 1.1-2A7 7 0 0 0 12 2Z" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function ControlButton({
+  active,
+  children,
+  disabled,
+  onClick,
+  tone = "neutral",
+}: Readonly<{
+  active: boolean;
+  children: React.ReactNode;
+  disabled: boolean;
+  onClick: () => void;
+  tone?: "neutral" | "accent";
+}>) {
+  const activeClass =
+    tone === "accent"
+      ? "bg-accent text-white border-accent"
+      : "bg-foreground text-background border-foreground";
+  const inactiveClass =
+    tone === "accent"
+      ? "bg-accent/10 text-accent border-accent/20 hover:bg-accent/15"
+      : "bg-background/75 text-foreground border-line hover:bg-background";
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+        active ? activeClass : inactiveClass
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -224,173 +266,131 @@ function RelayCard({
   reported,
   source,
   schedule,
+  draft,
   disabled,
   onToggle,
+  onDraftChange,
+  onSaveSchedule,
 }: Readonly<{
   relay: RelayNumber;
   desired: boolean;
   reported: boolean | null;
   source: DashboardStateResponse["relay26Source"];
   schedule: RelayScheduleSummary;
+  draft: ScheduleDraft;
   disabled: boolean;
   onToggle: (nextState: boolean) => void;
-}>) {
-  const mismatch = reported !== null && desired !== reported;
-
-  return (
-    <SurfaceCard className="flex h-full flex-col gap-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-            Relay {relay}
-          </p>
-          <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-            GPIO {relay}
-          </h2>
-        </div>
-        {mismatch ? (
-          <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">
-            Awaiting sync
-          </span>
-        ) : (
-          <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-            Stable
-          </span>
-        )}
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatePill label="Desired" value={desired ? "ON" : "OFF"} tone="accent" />
-        <StatePill
-          label="Reported"
-          value={describeRelay(reported)}
-          tone={mismatch ? "warn" : "neutral"}
-        />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatePill label="Control source" value={describeSource(source)} tone="neutral" />
-        <StatePill
-          label="Schedule"
-          value={
-            schedule.enabled
-              ? `${schedule.startTime} - ${schedule.endTime}`
-              : "Disabled"
-          }
-          tone={schedule.enabled ? "accent" : "neutral"}
-        />
-      </div>
-
-      <div className="rounded-[24px] border border-line/80 bg-background/55 p-3">
-        <p className="text-xs uppercase tracking-[0.24em] text-foreground/45">
-          Toggle state
-        </p>
-        <p className="mt-2 text-sm leading-6 text-foreground/65">
-          When scheduling is enabled, these buttons create a manual override until
-          the next schedule transition.
-        </p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onToggle(false)}
-            className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-              !desired
-                ? "bg-foreground text-background"
-                : "bg-black/5 text-foreground hover:bg-black/10 dark:bg-white/8 dark:hover:bg-white/14"
-            } disabled:cursor-not-allowed disabled:opacity-55`}
-          >
-            Turn OFF
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onToggle(true)}
-            className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-              desired
-                ? "bg-accent text-white"
-                : "bg-accent/12 text-accent hover:bg-accent/18"
-            } disabled:cursor-not-allowed disabled:opacity-55`}
-          >
-            Turn ON
-          </button>
-        </div>
-      </div>
-    </SurfaceCard>
-  );
-}
-
-function ScheduleEditorCard({
-  relay,
-  draft,
-  schedule,
-  disabled,
-  onDraftChange,
-  onSave,
-}: Readonly<{
-  relay: RelayNumber;
-  draft: ScheduleDraft;
-  schedule: RelayScheduleSummary;
-  disabled: boolean;
   onDraftChange: (patch: Partial<ScheduleDraft>) => void;
-  onSave: () => void;
+  onSaveSchedule: () => void;
 }>) {
+  const manualLocked = schedule.manualLocked;
+  const hasMismatch = reported !== null && reported !== desired;
+
   return (
-    <SurfaceCard className="flex h-full flex-col gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-            Relay {relay} schedule
-          </p>
-          <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-            Admin timer window
-          </h2>
-        </div>
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] ${
-            schedule.enabled
-              ? schedule.active
-                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                : "bg-sky-500/12 text-sky-700 dark:text-sky-300"
-              : "bg-black/5 text-foreground/65 dark:bg-white/8"
-          }`}
-        >
-          {schedule.enabled ? (schedule.active ? "Window active" : "Window idle") : "Disabled"}
-        </span>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatePill
-          label="Next transition"
-          value={formatDateTime(schedule.nextTransitionAt)}
-          tone={schedule.enabled ? "accent" : "neutral"}
-        />
-        <StatePill
-          label="Override until"
-          value={formatDateTime(schedule.overrideUntil)}
-          tone={schedule.overrideUntil ? "warn" : "neutral"}
-        />
-      </div>
-
-      <div className="grid gap-4 rounded-[24px] border border-line/80 bg-background/55 p-4">
-        <label className="flex items-center justify-between gap-3 rounded-2xl bg-panel/80 px-4 py-3">
+    <section className={cardClass("flex flex-col gap-5")}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <BulbIcon isOn={desired} />
           <div>
-            <p className="text-sm font-semibold">Enable daily schedule</p>
-            <p className="text-xs text-foreground/60">
-              Relay follows this time window automatically.
+            <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
+              Relay {relay}
+            </p>
+            <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground">
+              Bulb {relay}
+            </h2>
+            <p
+              className={`mt-2 text-sm font-semibold ${
+                desired ? "text-amber-600 dark:text-amber-300" : "text-foreground/60"
+              }`}
+            >
+              {desired ? "ON" : "OFF"}
             </p>
           </div>
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(event) => onDraftChange({ enabled: event.target.checked })}
-            className="h-5 w-5 accent-[var(--accent)]"
-          />
-        </label>
+        </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col items-end gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadgeClass(!hasMismatch)}`}>
+            {hasMismatch ? "Sync pending" : "In sync"}
+          </span>
+          <span className="rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-foreground/70 dark:bg-white/8">
+            {describeSource(source)}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatTile label="Desired" value={desired ? "ON" : "OFF"} />
+        <StatTile label="Reported" value={describeReported(reported)} />
+        <StatTile
+          label="Schedule"
+          value={schedule.enabled ? `${schedule.startTime} - ${schedule.endTime}` : "Off"}
+        />
+      </div>
+
+      <div className="grid gap-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-foreground">Manual control</p>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              manualLocked
+                ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+            }`}
+          >
+            {manualLocked ? "Locked by schedule" : "Available"}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <ControlButton
+            active={!desired}
+            disabled={disabled || manualLocked}
+            onClick={() => onToggle(false)}
+          >
+            Turn OFF
+          </ControlButton>
+          <ControlButton
+            active={desired}
+            tone="accent"
+            disabled={disabled || manualLocked}
+            onClick={() => onToggle(true)}
+          >
+            Turn ON
+          </ControlButton>
+        </div>
+
+        {manualLocked ? (
+          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+            Schedule is currently active. Disable the schedule to use manual buttons.
+          </div>
+        ) : schedule.enabled ? (
+          <div className="rounded-2xl border border-line/70 bg-background/60 px-4 py-3 text-sm text-foreground/65">
+            Manual changes are allowed right now and will be replaced at the next schedule time.
+          </div>
+        ) : null}
+      </div>
+
+      <div className="h-px bg-line/80" />
+
+      <div className="grid gap-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-foreground">Schedule</p>
+          <label className="inline-flex items-center gap-3 rounded-full border border-line/80 bg-background/65 px-3 py-2 text-sm font-medium">
+            <span>{draft.enabled ? "Enabled" : "Disabled"}</span>
+            <input
+              type="checkbox"
+              checked={draft.enabled}
+              onChange={(event) => onDraftChange({ enabled: event.target.checked })}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+          </label>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-2">
-            <span className="text-sm font-medium text-foreground/70">Start time</span>
+            <span className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+              Start
+            </span>
             <input
               type="time"
               value={draft.startTime}
@@ -400,7 +400,9 @@ function ScheduleEditorCard({
           </label>
 
           <label className="grid gap-2">
-            <span className="text-sm font-medium text-foreground/70">End time</span>
+            <span className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+              End
+            </span>
             <input
               type="time"
               value={draft.endTime}
@@ -411,7 +413,9 @@ function ScheduleEditorCard({
         </div>
 
         <label className="grid gap-2">
-          <span className="text-sm font-medium text-foreground/70">Timezone</span>
+          <span className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+            Timezone
+          </span>
           <input
             type="text"
             value={draft.timezone}
@@ -421,22 +425,24 @@ function ScheduleEditorCard({
           />
         </label>
 
-        <div className="grid gap-3 sm:grid-cols-3">
-          <StatePill label="Current source" value={describeSource(schedule.controlSource)} />
-          <StatePill label="Saved window" value={`${schedule.startTime} - ${schedule.endTime}`} />
-          <StatePill label="Saved zone" value={schedule.timezone} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <StatTile
+            label="Next change"
+            value={formatDateTime(schedule.nextTransitionAt)}
+          />
+          <StatTile label="Zone" value={schedule.timezone} />
         </div>
 
         <button
           type="button"
-          onClick={onSave}
+          onClick={onSaveSchedule}
           disabled={disabled}
-          className="rounded-full bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Save relay {relay} schedule
+          Save schedule
         </button>
       </div>
-    </SurfaceCard>
+    </section>
   );
 }
 
@@ -456,28 +462,37 @@ export default function DashboardClient() {
   const hasSnapshot = Boolean(snapshot);
   const isBusy = Boolean(actionLabel) || isPending;
 
+  function applySnapshot(nextSnapshot: DashboardStateResponse) {
+    startTransition(() => {
+      setSnapshot(nextSnapshot);
+    });
+    setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
+  }
+
   useEffect(() => {
     const savedToken = window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ?? "";
     setAdminToken(savedToken);
 
-    if (savedToken) {
-      void (async () => {
-        try {
-          const nextSnapshot = await fetchDashboardState(savedToken);
-          startTransition(() => {
-            setSnapshot(nextSnapshot);
-          });
-          setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
-          setError("");
-        } catch (caughtError) {
-          setError(
-            caughtError instanceof Error
-              ? caughtError.message
-              : "Unable to load dashboard state.",
-          );
-        }
-      })();
+    if (!savedToken) {
+      return;
     }
+
+    void (async () => {
+      try {
+        const nextSnapshot = await fetchDashboardState(savedToken);
+        startTransition(() => {
+          setSnapshot(nextSnapshot);
+        });
+        setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
+        setError("");
+      } catch (caughtError) {
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Unable to load dashboard state.",
+        );
+      }
+    })();
   }, [browserTimeZone]);
 
   async function loadDashboard(tokenOverride?: string, silent = false) {
@@ -485,35 +500,32 @@ export default function DashboardClient() {
 
     if (!token) {
       if (!silent) {
-        setError("Enter the ADMIN_SECRET to unlock the dashboard.");
+        setError("Enter the admin token.");
       }
       return null;
     }
 
     if (!silent) {
-      setActionLabel("Refreshing dashboard");
+      setActionLabel("Refreshing");
     }
 
     try {
       const nextSnapshot = await fetchDashboardState(token);
       window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-      startTransition(() => {
-        setSnapshot(nextSnapshot);
-      });
-      setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
+      applySnapshot(nextSnapshot);
       setError("");
 
       if (!silent) {
-        setNotice("Dashboard synced with the backend.");
+        setNotice("Updated");
       }
 
       return nextSnapshot;
     } catch (caughtError) {
-      const message =
+      setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "Unable to load dashboard state.";
-      setError(message);
+          : "Unable to load dashboard state.",
+      );
       return null;
     } finally {
       if (!silent) {
@@ -522,49 +534,36 @@ export default function DashboardClient() {
     }
   }
 
-  async function updateSingleRelay(relay: RelayNumber, nextState: boolean) {
+  async function updateRelay(relay: RelayNumber, nextState: boolean) {
     if (!snapshot) {
-      setError("Load the dashboard first so the current device state is available.");
+      setError("Load the dashboard first.");
       return;
     }
 
     const token = adminToken.trim();
 
     if (!token) {
-      setError("Enter the ADMIN_SECRET to send relay commands.");
+      setError("Enter the admin token.");
       return;
     }
 
-    const previous = snapshot;
+    const schedule =
+      relay === "26" ? snapshot.relay26Schedule : snapshot.relay27Schedule;
 
-    startTransition(() => {
-      setSnapshot({
-        ...previous,
-        ...(relay === "26"
-          ? { relay26Desired: nextState }
-          : { relay27Desired: nextState }),
-        updatedAt: new Date().toISOString(),
-      });
-    });
+    if (schedule.manualLocked) {
+      setError("This relay is locked by an active schedule. Disable the schedule first.");
+      return;
+    }
 
-    setActionLabel(`Sending relay ${relay} command`);
+    setActionLabel(`Relay ${relay}`);
     setError("");
     setNotice("");
 
     try {
       await postRelayState(relay, token, nextState);
-      const refreshed = await loadDashboard(token, true);
-      setNotice(
-        refreshed &&
-          ((relay === "26" && refreshed.relay26Source === "manual-override") ||
-            (relay === "27" && refreshed.relay27Source === "manual-override"))
-          ? `Relay ${relay} updated. That manual state will hold until the next schedule change.`
-          : `Relay ${relay} updated successfully.`,
-      );
+      await loadDashboard(token, true);
+      setNotice(`Relay ${relay} ${nextState ? "ON" : "OFF"}`);
     } catch (caughtError) {
-      startTransition(() => {
-        setSnapshot(previous);
-      });
       setError(
         caughtError instanceof Error
           ? caughtError.message
@@ -575,76 +574,18 @@ export default function DashboardClient() {
     }
   }
 
-  async function updateAllRelays(nextRelay26: boolean, nextRelay27: boolean) {
-    if (!snapshot) {
-      setError("Load the dashboard first so the current device state is available.");
-      return;
-    }
-
-    const token = adminToken.trim();
-
-    if (!token) {
-      setError("Enter the ADMIN_SECRET to send relay commands.");
-      return;
-    }
-
-    const previous = snapshot;
-
-    startTransition(() => {
-      setSnapshot({
-        ...previous,
-        relay26Desired: nextRelay26,
-        relay27Desired: nextRelay27,
-        updatedAt: new Date().toISOString(),
-      });
-    });
-
-    setActionLabel("Sending group command");
-    setError("");
-    setNotice("");
-
-    try {
-      await postRelayGroup(token, nextRelay26, nextRelay27);
-      const refreshed = await loadDashboard(token, true);
-      setNotice(
-        refreshed &&
-          (refreshed.relay26Source === "manual-override" ||
-            refreshed.relay27Source === "manual-override")
-          ? "Both relays updated. Scheduled relays are now manually overridden until their next time boundary."
-          : "Both relay states were updated.",
-      );
-    } catch (caughtError) {
-      startTransition(() => {
-        setSnapshot(previous);
-      });
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to update both relays.",
-      );
-    } finally {
-      setActionLabel("");
-    }
-  }
-
   async function saveSchedule(relay: RelayNumber) {
     const token = adminToken.trim();
 
     if (!token) {
-      setError("Enter the ADMIN_SECRET to save schedules.");
+      setError("Enter the admin token.");
       return;
     }
 
     const draft = scheduleDrafts[relay];
-    const timezone = draft.timezone.trim();
-
-    if (!timezone) {
-      setError("Timezone is required. Try Asia/Kolkata.");
-      return;
-    }
 
     if (!draft.startTime || !draft.endTime) {
-      setError("Both schedule times are required.");
+      setError("Start time and end time are required.");
       return;
     }
 
@@ -653,7 +594,12 @@ export default function DashboardClient() {
       return;
     }
 
-    setActionLabel(`Saving relay ${relay} schedule`);
+    if (!draft.timezone.trim()) {
+      setError("Timezone is required.");
+      return;
+    }
+
+    setActionLabel(`Saving ${relay}`);
     setError("");
     setNotice("");
 
@@ -664,19 +610,15 @@ export default function DashboardClient() {
         draft.enabled,
         draft.startTime,
         draft.endTime,
-        timezone,
+        draft.timezone.trim(),
       );
       await loadDashboard(token, true);
-      setNotice(
-        draft.enabled
-          ? `Relay ${relay} schedule saved. The backend will now switch it automatically between ${draft.startTime} and ${draft.endTime}.`
-          : `Relay ${relay} schedule disabled. Manual control is active now.`,
-      );
+      setNotice(`Relay ${relay} schedule saved`);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : `Unable to save relay ${relay} schedule.`,
+          : `Unable to save schedule for relay ${relay}.`,
       );
     } finally {
       setActionLabel("");
@@ -688,300 +630,97 @@ export default function DashboardClient() {
     setAdminToken("");
     setSnapshot(null);
     setScheduleDrafts(buildScheduleDrafts(fallbackSnapshot, browserTimeZone));
-    setNotice("Stored admin token cleared from this browser.");
+    setNotice("");
     setError("");
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-      <section className="grid gap-4 lg:grid-cols-[1.3fr_.9fr]">
-        <SurfaceCard className="overflow-hidden">
-          <div className="relative">
-            <div className="absolute inset-y-0 right-0 hidden w-40 rounded-full bg-accent/10 blur-3xl lg:block" />
-            <div className="relative flex flex-col gap-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="max-w-2xl">
-                  <p className="text-sm uppercase tracking-[0.32em] text-foreground/45">
-                    Light Control Backend
-                  </p>
-                  <h1 className="mt-3 max-w-xl font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-                    HTTP relay control, daily scheduling, and reboot-safe sync for ESP32.
-                  </h1>
-                  <p className="mt-4 max-w-2xl text-base leading-7 text-foreground/70">
-                    The backend now drives relay timing centrally. Your ESP32 only
-                    polls the API, applies GPIO 26 and 27, and restores the saved
-                    state immediately after power comes back.
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  <Link
-                    href="/integration"
-                    className="rounded-full border border-line/80 bg-background/70 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-background"
-                  >
-                    ESP32 integration
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => void loadDashboard()}
-                    disabled={isBusy || !adminToken.trim()}
-                    className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {actionLabel || "Refresh"}
-                  </button>
-                </div>
-              </div>
+    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
+      <header className={cardClass("flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between")}>
+        <div>
+          <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
+            Light Control
+          </p>
+          <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            Relay Dashboard
+          </h1>
+        </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
-                <StatePill label="Device" value={displaySnapshot.deviceId} tone="neutral" />
-                <StatePill
-                  label="Desired updated"
-                  value={formatRelativeTime(displaySnapshot.updatedAt || null)}
-                  tone="accent"
-                />
-                <StatePill
-                  label="Reported updated"
-                  value={formatRelativeTime(displaySnapshot.reportedAt)}
-                  tone="neutral"
-                />
-              </div>
-            </div>
-          </div>
-        </SurfaceCard>
-
-        <SurfaceCard className="flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-                Admin access
-              </p>
-              <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-                Unlock controls
-              </h2>
-            </div>
-            <StatusBadge online={displaySnapshot.online} />
+        <div className="flex flex-col gap-3 lg:items-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                displaySnapshot.online
+                  ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                  : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+              }`}
+            >
+              {displaySnapshot.online ? "Online" : "Offline"}
+            </span>
+            <Link
+              href="/integration"
+              className="rounded-full border border-line/80 bg-background/70 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-background"
+            >
+              Integration
+            </Link>
           </div>
 
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void loadDashboard();
-            }}
-          >
-            <label className="text-sm font-medium text-foreground/70" htmlFor="admin-token">
-              Admin token
-            </label>
+          <div className="flex w-full flex-col gap-3 sm:flex-row">
             <input
-              id="admin-token"
               type="password"
               autoComplete="off"
               value={adminToken}
               onChange={(event) => setAdminToken(event.target.value)}
-              placeholder="Paste ADMIN_SECRET"
-              className="w-full rounded-2xl border border-line bg-background/70 px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15"
+              placeholder="Admin token"
+              className="min-w-[240px] rounded-2xl border border-line bg-background/75 px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15"
             />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="submit"
-                disabled={isBusy}
-                className="rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Load dashboard
-              </button>
-              <button
-                type="button"
-                onClick={clearToken}
-                className="rounded-full border border-line px-4 py-2 text-sm font-semibold text-foreground/80 transition hover:bg-background/80"
-              >
-                Clear token
-              </button>
-            </div>
-          </form>
+            <button
+              type="button"
+              onClick={() => void loadDashboard()}
+              disabled={isBusy}
+              className="rounded-2xl bg-foreground px-4 py-3 text-sm font-semibold text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {actionLabel || "Refresh"}
+            </button>
+            <button
+              type="button"
+              onClick={clearToken}
+              className="rounded-2xl border border-line bg-background/75 px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-background"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      </header>
 
-          <p className="text-sm leading-6 text-foreground/62">
-            The token stays only in this browser&apos;s local storage so you can
-            refresh without re-entering it each time.
-          </p>
-        </SurfaceCard>
+      <section className="grid gap-3 md:grid-cols-3">
+        <StatTile label="Device" value={displaySnapshot.deviceId} />
+        <StatTile label="Last seen" value={formatRelativeTime(displaySnapshot.lastSeen)} />
+        <StatTile label="Last report" value={formatRelativeTime(displaySnapshot.reportedAt)} />
       </section>
 
       {error ? (
-        <div className="rounded-3xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
+        <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
           {error}
         </div>
       ) : null}
 
-      {notice ? (
-        <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-200">
+      {!error && notice ? (
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-200">
           {notice}
         </div>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr_1fr]">
-        <SurfaceCard className="flex h-full flex-col gap-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-                Device status
-              </p>
-              <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-                {displaySnapshot.deviceId}
-              </h2>
-            </div>
-            <StatusBadge online={displaySnapshot.online} />
-          </div>
-
-          <div className="grid gap-3">
-            <StatePill
-              label="Last seen"
-              value={formatRelativeTime(displaySnapshot.lastSeen)}
-              tone={displaySnapshot.online ? "accent" : "warn"}
-            />
-            <StatePill
-              label="Heartbeat clock"
-              value={formatDateTime(displaySnapshot.lastSeen)}
-              tone="neutral"
-            />
-            <StatePill
-              label="Storage mode"
-              value={displaySnapshot.storageMode}
-              tone="neutral"
-            />
-          </div>
-        </SurfaceCard>
-
+      <section className="grid gap-4 xl:grid-cols-2">
         <RelayCard
           relay="26"
           desired={displaySnapshot.relay26Desired}
           reported={displaySnapshot.relay26Reported}
           source={displaySnapshot.relay26Source}
           schedule={displaySnapshot.relay26Schedule}
-          disabled={!hasSnapshot || isBusy}
-          onToggle={(nextState) => void updateSingleRelay("26", nextState)}
-        />
-
-        <RelayCard
-          relay="27"
-          desired={displaySnapshot.relay27Desired}
-          reported={displaySnapshot.relay27Reported}
-          source={displaySnapshot.relay27Source}
-          schedule={displaySnapshot.relay27Schedule}
-          disabled={!hasSnapshot || isBusy}
-          onToggle={(nextState) => void updateSingleRelay("27", nextState)}
-        />
-      </section>
-
-      <section className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
-        <SurfaceCard className="flex flex-col gap-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-                Combined control
-              </p>
-              <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-                Set both relays together
-              </h2>
-            </div>
-            <div className="flex gap-2 text-sm font-semibold">
-              <span className="rounded-full bg-black/5 px-3 py-1 dark:bg-white/8">
-                26: {displaySnapshot.relay26Desired ? "ON" : "OFF"}
-              </span>
-              <span className="rounded-full bg-black/5 px-3 py-1 dark:bg-white/8">
-                27: {displaySnapshot.relay27Desired ? "ON" : "OFF"}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <button
-              type="button"
-              disabled={!hasSnapshot || isBusy}
-              onClick={() => void updateAllRelays(true, true)}
-              className="rounded-[24px] bg-accent px-4 py-4 text-left text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <p className="text-xs uppercase tracking-[0.26em] text-white/70">Scene</p>
-              <p className="mt-2 text-lg font-semibold">All ON</p>
-              <p className="mt-1 text-sm text-white/75">Drive both outputs high.</p>
-            </button>
-
-            <button
-              type="button"
-              disabled={!hasSnapshot || isBusy}
-              onClick={() => void updateAllRelays(false, false)}
-              className="rounded-[24px] bg-foreground px-4 py-4 text-left text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <p className="text-xs uppercase tracking-[0.26em] text-background/70">
-                Scene
-              </p>
-              <p className="mt-2 text-lg font-semibold">All OFF</p>
-              <p className="mt-1 text-sm text-background/75">
-                Return both outputs to idle.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              disabled={!hasSnapshot || isBusy}
-              onClick={() =>
-                void updateAllRelays(
-                  !displaySnapshot.relay26Desired,
-                  !displaySnapshot.relay27Desired,
-                )
-              }
-              className="rounded-[24px] border border-line bg-background/65 px-4 py-4 text-left transition hover:bg-background disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <p className="text-xs uppercase tracking-[0.26em] text-foreground/45">
-                Scene
-              </p>
-              <p className="mt-2 text-lg font-semibold">Invert both</p>
-              <p className="mt-1 text-sm text-foreground/70">
-                Flip each desired relay state.
-              </p>
-            </button>
-          </div>
-        </SurfaceCard>
-
-        <SurfaceCard className="flex flex-col gap-5">
-          <div>
-            <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
-              Device loop
-            </p>
-            <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-              Power restore behavior
-            </h2>
-          </div>
-
-          <ol className="grid gap-3 text-sm leading-6 text-foreground/75">
-            <li className="rounded-2xl bg-background/55 px-4 py-3">
-              1. ESP32 boots with both relays in a safe default state.
-            </li>
-            <li className="rounded-2xl bg-background/55 px-4 py-3">
-              2. It reconnects to Wi-Fi and registers again if needed.
-            </li>
-            <li className="rounded-2xl bg-background/55 px-4 py-3">
-              3. It fetches <code>/api/device/sync</code> immediately after boot.
-            </li>
-            <li className="rounded-2xl bg-background/55 px-4 py-3">
-              4. The saved desired state is applied again, so manual or scheduled
-              state comes back after a power cut.
-            </li>
-          </ol>
-
-          <Link
-            href="/integration"
-            className="rounded-full border border-line px-4 py-3 text-center text-sm font-semibold text-foreground transition hover:bg-background/80"
-          >
-            Open full endpoint examples
-          </Link>
-        </SurfaceCard>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
-        <ScheduleEditorCard
-          relay="26"
           draft={scheduleDrafts["26"]}
-          schedule={displaySnapshot.relay26Schedule}
           disabled={!hasSnapshot || isBusy}
+          onToggle={(nextState) => void updateRelay("26", nextState)}
           onDraftChange={(patch) =>
             setScheduleDrafts((current) => ({
               ...current,
@@ -991,14 +730,18 @@ export default function DashboardClient() {
               },
             }))
           }
-          onSave={() => void saveSchedule("26")}
+          onSaveSchedule={() => void saveSchedule("26")}
         />
 
-        <ScheduleEditorCard
+        <RelayCard
           relay="27"
-          draft={scheduleDrafts["27"]}
+          desired={displaySnapshot.relay27Desired}
+          reported={displaySnapshot.relay27Reported}
+          source={displaySnapshot.relay27Source}
           schedule={displaySnapshot.relay27Schedule}
+          draft={scheduleDrafts["27"]}
           disabled={!hasSnapshot || isBusy}
+          onToggle={(nextState) => void updateRelay("27", nextState)}
           onDraftChange={(patch) =>
             setScheduleDrafts((current) => ({
               ...current,
@@ -1008,7 +751,7 @@ export default function DashboardClient() {
               },
             }))
           }
-          onSave={() => void saveSchedule("27")}
+          onSaveSchedule={() => void saveSchedule("27")}
         />
       </section>
     </main>

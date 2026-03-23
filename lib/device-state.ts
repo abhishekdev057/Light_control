@@ -2,6 +2,7 @@ import { DEFAULT_DEVICE_ID } from "@/lib/constants";
 import {
   buildScheduleSummary,
   getNextScheduleTransitionAt,
+  isManualControlLocked,
   resolveRelayValue,
 } from "@/lib/schedule";
 import { getStorageMode, readDeviceState, writeDeviceState } from "@/lib/storage";
@@ -128,6 +129,12 @@ function createClearedOverride() {
     expiresAt: null,
     updatedAt: null,
   };
+}
+
+function getManualLockMessage(relay: RelayKey) {
+  return `${
+    relay === "relay26" ? "Relay 26" : "Relay 27"
+  } is currently inside its active schedule window. Disable the schedule before using manual buttons.`;
 }
 
 function createOverrideForRelay(
@@ -281,6 +288,15 @@ export async function getDesiredRelayState(deviceId: string) {
 export async function setDesiredRelay(relay: RelayKey, value: boolean) {
   const timestamp = nowIso();
   const current = await readDeviceState();
+  const now = new Date(timestamp);
+
+  if (isManualControlLocked(current.schedules[relay], now)) {
+    return {
+      ok: false as const,
+      message: getManualLockMessage(relay),
+    };
+  }
+
   const nextState: PersistedDeviceState = {
     ...current,
     desired: {
@@ -296,9 +312,10 @@ export async function setDesiredRelay(relay: RelayKey, value: boolean) {
 
   await writeDeviceState(nextState);
 
-  const resolved = resolveEffectiveRelays(nextState, new Date(timestamp));
+  const resolved = resolveEffectiveRelays(nextState, now);
 
   return {
+    ok: true as const,
     state: nextState,
     resolved,
   };
@@ -307,6 +324,27 @@ export async function setDesiredRelay(relay: RelayKey, value: boolean) {
 export async function setDesiredRelays(relay26: boolean, relay27: boolean) {
   const timestamp = nowIso();
   const current = await readDeviceState();
+  const now = new Date(timestamp);
+  const lockedRelays: RelayKey[] = [];
+
+  if (isManualControlLocked(current.schedules.relay26, now)) {
+    lockedRelays.push("relay26");
+  }
+
+  if (isManualControlLocked(current.schedules.relay27, now)) {
+    lockedRelays.push("relay27");
+  }
+
+  if (lockedRelays.length > 0) {
+    return {
+      ok: false as const,
+      message:
+        lockedRelays.length === 1
+          ? getManualLockMessage(lockedRelays[0])
+          : "One or more relays are inside an active schedule window. Disable those schedules before using group controls.",
+    };
+  }
+
   const nextState: PersistedDeviceState = {
     ...current,
     desired: {
@@ -322,9 +360,10 @@ export async function setDesiredRelays(relay26: boolean, relay27: boolean) {
 
   await writeDeviceState(nextState);
 
-  const resolved = resolveEffectiveRelays(nextState, new Date(timestamp));
+  const resolved = resolveEffectiveRelays(nextState, now);
 
   return {
+    ok: true as const,
     state: nextState,
     resolved,
   };

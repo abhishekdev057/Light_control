@@ -64,7 +64,7 @@ const endpointExamples: EndpointExample[] = [
   {
     method: "POST",
     path: "/api/relay/26",
-    description: "Set relay 26 manually. If scheduling is enabled, this becomes a temporary override until the next schedule change.",
+    description: "Set relay 26 manually. This is allowed when the schedule is disabled or currently outside the active schedule window.",
     payload: `{
   "adminToken": "ADMIN_SECRET",
   "state": true
@@ -80,7 +80,7 @@ const endpointExamples: EndpointExample[] = [
   {
     method: "POST",
     path: "/api/schedule/26",
-    description: "Set relay 26 daily schedule. The backend handles time windows so the ESP32 only keeps polling desired state.",
+    description: "Set relay 26 daily schedule. The backend handles time windows and locks manual buttons while the schedule window is active.",
     payload: `{
   "adminToken": "ADMIN_SECRET",
   "enabled": true,
@@ -102,7 +102,8 @@ const endpointExamples: EndpointExample[] = [
     "active": false,
     "nextTransitionAt": "2026-03-23T12:30:00.000Z",
     "overrideUntil": null,
-    "controlSource": "schedule"
+    "controlSource": "schedule",
+    "manualLocked": false
   }
 }`,
   },
@@ -131,7 +132,8 @@ const endpointExamples: EndpointExample[] = [
     "active": false,
     "nextTransitionAt": "2026-03-23T13:00:00.000Z",
     "overrideUntil": null,
-    "controlSource": "schedule"
+    "controlSource": "schedule",
+    "manualLocked": false
   }
 }`,
   },

@@ -1,6 +1,6 @@
 import { setDesiredRelays } from "@/lib/device-state";
 import { requireAdminAuth } from "@/lib/auth";
-import { jsonResponse, parseJsonBody } from "@/lib/http";
+import { errorResponse, jsonResponse, parseJsonBody } from "@/lib/http";
 import { relayAllCommandSchema } from "@/lib/schemas";
 import type { RelayAllCommandRequest, RelayAllResponse } from "@/lib/types";
 
@@ -23,6 +23,10 @@ export async function POST(request: Request) {
   }
 
   const state = await setDesiredRelays(parsed.data.relay26, parsed.data.relay27);
+
+  if (!state.ok) {
+    return errorResponse(409, state.message);
+  }
 
   return jsonResponse<RelayAllResponse>({
     success: true,

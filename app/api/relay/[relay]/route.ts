@@ -47,6 +47,10 @@ export async function POST(
 
   const state = await setDesiredRelay(relayKey, parsed.data.state);
 
+  if (!state.ok) {
+    return errorResponse(409, state.message);
+  }
+
   return jsonResponse<RelaySingleResponse>({
     success: true,
     ...(relayKey === "relay26"

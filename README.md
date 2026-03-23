@@ -9,7 +9,7 @@ A full-stack Next.js App Router project for controlling an ESP32 with two relays
 - Device online/offline status using heartbeat timing
 - Token-based auth for both device and admin requests
 - Daily per-relay scheduling with admin-set start time, end time, and timezone
-- Manual relay buttons that temporarily override a running schedule until the next schedule boundary
+- Manual relay buttons with locking during active schedule windows
 - Power-restore-safe ESP32 flow where the board fetches desired state again after boot
 - Vercel-friendly route handlers under `app/api`
 - Storage abstraction with three modes:
@@ -96,13 +96,14 @@ When a schedule is enabled:
 
 - Inside the schedule window, the relay target becomes `ON`
 - Outside the schedule window, the relay target becomes `OFF`
-- If the admin presses `ON` or `OFF`, that acts as a manual override until the next schedule transition
+- During the active schedule window, manual buttons are locked until the schedule is disabled
+- Outside the active schedule window, manual button changes are allowed until the next schedule transition
 
 Examples:
 
 - Schedule `18:00` to `21:00`: relay turns on at 6:00 PM and turns off at 9:00 PM
-- Admin turns it off at 7:30 PM: it stays off until 9:00 PM, then the schedule continues normally
-- Admin turns it on at 4:00 PM: it stays on until 6:00 PM, then the normal schedule takes over
+- Admin turns it on at 4:00 PM: it stays on until 6:00 PM, then the schedule window takes over
+- At 7:30 PM, manual buttons are locked because the schedule window is active
 
 ## Request examples
 
@@ -223,7 +224,7 @@ State is preserved because the backend stores:
 
 - manual desired state
 - schedule configuration
-- temporary manual overrides
+- temporary manual overrides outside active schedule windows
 - device reported state
 
 After ESP32 power returns:

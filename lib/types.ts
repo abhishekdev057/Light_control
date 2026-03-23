@@ -49,6 +49,7 @@ export interface RelayScheduleSummary extends RelayScheduleConfig {
   nextTransitionAt: string | null;
   overrideUntil: string | null;
   controlSource: RelaySource;
+  manualLocked: boolean;
 }
 
 export interface PersistedDeviceState {
