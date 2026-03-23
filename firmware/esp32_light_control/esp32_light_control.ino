@@ -2,12 +2,11 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
-// Replace these values before uploading.
 const char *WIFI_SSID = "AirFiber-5g";
 const char *WIFI_PASSWORD = "chalalowifi";
 const char *BASE_URL = "https://light-control-five.vercel.app";
 const char *DEVICE_ID = "esp32-relay-01";
-const char *DEVICE_TOKEN = "Justdevice";
+const char *DEVICE_TOKEN = "justdevice";
 
 constexpr int RELAY26_PIN = 26;
 constexpr int RELAY27_PIN = 27;
@@ -19,6 +18,13 @@ constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 5000;
 constexpr unsigned long SYNC_INTERVAL_MS = 1500;
+constexpr unsigned long REPORT_RETRY_INTERVAL_MS = 2000;
+constexpr uint32_t HTTP_TIMEOUT_MS = 5000;
+
+struct HttpResult {
+  int statusCode;
+  String body;
+};
 
 WiFiClientSecure secureClient;
 
@@ -28,10 +34,13 @@ bool appliedRelay26 = false;
 bool appliedRelay27 = false;
 bool hasAppliedState = false;
 bool deviceRegistered = false;
+bool reportPending = false;
+bool wifiWasConnected = false;
 
 unsigned long lastWifiAttemptMs = 0;
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastSyncMs = 0;
+unsigned long lastReportAttemptMs = 0;
 
 String boolToJson(bool value) {
   return value ? "true" : "false";
@@ -105,44 +114,92 @@ void applyRelayOutputs(bool relay26, bool relay27) {
   digitalWrite(RELAY27_PIN, relayPinLevel(relay27));
 }
 
-int httpPostJson(const String &url, const String &payload, String &responseBody) {
-  HTTPClient http;
-  secureClient.setInsecure();
-
-  if (!http.begin(secureClient, url)) {
-    return -1;
-  }
-
-  http.setTimeout(5000);
-  http.addHeader("Content-Type", "application/json");
-
-  const int statusCode = http.POST(payload);
-  responseBody = statusCode > 0 ? http.getString() : "";
-  http.end();
-
-  return statusCode;
+void resetDeviceSessionState() {
+  deviceRegistered = false;
+  lastHeartbeatMs = 0;
+  lastSyncMs = 0;
+  lastReportAttemptMs = 0;
 }
 
-int httpGet(const String &url, String &responseBody) {
-  HTTPClient http;
-  secureClient.setInsecure();
+bool shouldReRegister(int statusCode) {
+  return statusCode == 404;
+}
 
-  if (!http.begin(secureClient, url)) {
-    return -1;
+void handleRequestFailure(const char *label, const HttpResult &result) {
+  Serial.print(label);
+  Serial.print(" failed. Status: ");
+  Serial.println(result.statusCode);
+
+  if (result.body.length() > 0) {
+    Serial.println(result.body);
   }
 
-  http.setTimeout(5000);
+  if (shouldReRegister(result.statusCode)) {
+    resetDeviceSessionState();
+  }
+}
 
-  const int statusCode = http.GET();
-  responseBody = statusCode > 0 ? http.getString() : "";
+HttpResult httpPostJson(const String &url, const String &payload) {
+  HTTPClient http;
+  HttpResult result{ -1, "" };
+
+  secureClient.setInsecure();
+  secureClient.setTimeout(HTTP_TIMEOUT_MS);
+
+  if (!http.begin(secureClient, url)) {
+    return result;
+  }
+
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Connection", "close");
+
+  result.statusCode = http.POST(payload);
+  result.body = result.statusCode > 0 ? http.getString() : "";
   http.end();
 
-  return statusCode;
+  return result;
+}
+
+HttpResult httpGet(const String &url) {
+  HTTPClient http;
+  HttpResult result{ -1, "" };
+
+  secureClient.setInsecure();
+  secureClient.setTimeout(HTTP_TIMEOUT_MS);
+
+  if (!http.begin(secureClient, url)) {
+    return result;
+  }
+
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("Connection", "close");
+
+  result.statusCode = http.GET();
+  result.body = result.statusCode > 0 ? http.getString() : "";
+  http.end();
+
+  return result;
 }
 
 bool connectToWiFi() {
-  if (WiFi.status() == WL_CONNECTED) {
+  const wl_status_t wifiStatus = WiFi.status();
+
+  if (wifiStatus == WL_CONNECTED) {
+    if (!wifiWasConnected) {
+      wifiWasConnected = true;
+      resetDeviceSessionState();
+      Serial.print("Wi-Fi connected. IP: ");
+      Serial.println(WiFi.localIP());
+    }
+
     return true;
+  }
+
+  if (wifiWasConnected) {
+    wifiWasConnected = false;
+    resetDeviceSessionState();
+    Serial.println("Wi-Fi disconnected.");
   }
 
   const unsigned long now = millis();
@@ -155,6 +212,8 @@ bool connectToWiFi() {
 
   Serial.println("Connecting to Wi-Fi...");
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   const unsigned long startedAt = millis();
@@ -168,9 +227,10 @@ bool connectToWiFi() {
   Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
+    wifiWasConnected = true;
+    resetDeviceSessionState();
     Serial.print("Wi-Fi connected. IP: ");
     Serial.println(WiFi.localIP());
-    deviceRegistered = false;
     return true;
   }
 
@@ -179,82 +239,76 @@ bool connectToWiFi() {
 }
 
 bool registerDevice() {
-  String responseBody;
   const String payload =
       String("{\"deviceId\":\"") + DEVICE_ID + "\",\"token\":\"" + DEVICE_TOKEN + "\"}";
-  const int statusCode =
-      httpPostJson(String(BASE_URL) + "/api/device/register", payload, responseBody);
+  const HttpResult result =
+      httpPostJson(String(BASE_URL) + "/api/device/register", payload);
 
-  if (statusCode == 200 && responseLooksSuccessful(responseBody)) {
+  if (result.statusCode == 200 && responseLooksSuccessful(result.body)) {
     deviceRegistered = true;
     Serial.println("Device registered.");
     return true;
   }
 
-  Serial.print("Register failed. Status: ");
-  Serial.println(statusCode);
-  Serial.println(responseBody);
+  handleRequestFailure("Register", result);
   return false;
 }
 
 bool pingDevice() {
-  String responseBody;
   const String payload =
       String("{\"deviceId\":\"") + DEVICE_ID + "\",\"token\":\"" + DEVICE_TOKEN +
       "\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-  const int statusCode =
-      httpPostJson(String(BASE_URL) + "/api/device/ping", payload, responseBody);
+  const HttpResult result =
+      httpPostJson(String(BASE_URL) + "/api/device/ping", payload);
 
-  if (statusCode == 200 && responseLooksSuccessful(responseBody)) {
+  if (result.statusCode == 200 && responseLooksSuccessful(result.body)) {
     return true;
   }
 
-  Serial.print("Ping failed. Status: ");
-  Serial.println(statusCode);
-  Serial.println(responseBody);
+  handleRequestFailure("Ping", result);
   return false;
 }
 
 bool reportAppliedState() {
-  String responseBody;
+  if (!hasAppliedState) {
+    return true;
+  }
+
   const String payload =
       String("{\"deviceId\":\"") + DEVICE_ID + "\",\"token\":\"" + DEVICE_TOKEN +
       "\",\"relay26\":" + boolToJson(appliedRelay26) + ",\"relay27\":" +
       boolToJson(appliedRelay27) + "}";
-  const int statusCode =
-      httpPostJson(String(BASE_URL) + "/api/device/report", payload, responseBody);
+  const HttpResult result =
+      httpPostJson(String(BASE_URL) + "/api/device/report", payload);
 
-  if (statusCode == 200 && responseLooksSuccessful(responseBody)) {
+  if (result.statusCode == 200 && responseLooksSuccessful(result.body)) {
+    reportPending = false;
     return true;
   }
 
-  Serial.print("Report failed. Status: ");
-  Serial.println(statusCode);
-  Serial.println(responseBody);
+  reportPending = true;
+  handleRequestFailure("Report", result);
   return false;
 }
 
 bool fetchDesiredState(bool &relay26, bool &relay27) {
-  String responseBody;
   const String url =
       String(BASE_URL) + "/api/device/sync?deviceId=" + urlEncode(String(DEVICE_ID)) +
       "&token=" + urlEncode(String(DEVICE_TOKEN));
-  const int statusCode = httpGet(url, responseBody);
+  const HttpResult result = httpGet(url);
 
-  if (statusCode != 200) {
-    Serial.print("Sync failed. Status: ");
-    Serial.println(statusCode);
-    Serial.println(responseBody);
+  if (result.statusCode != 200) {
+    handleRequestFailure("Sync", result);
     return false;
   }
 
   bool parsedRelay26 = false;
   bool parsedRelay27 = false;
 
-  if (!extractJsonBool(responseBody, "r26", parsedRelay26) ||
-      !extractJsonBool(responseBody, "r27", parsedRelay27)) {
+  if (!extractJsonBool(result.body, "r26", parsedRelay26) ||
+      !extractJsonBool(result.body, "r27", parsedRelay27)) {
     Serial.println("Unable to parse sync response.");
-    Serial.println(responseBody);
+    Serial.println(result.body);
     return false;
   }
 
@@ -275,7 +329,12 @@ void applyDesiredState(bool relay26, bool relay27, bool forceReport) {
   appliedRelay27 = relay27;
   hasAppliedState = true;
 
-  if ((changed || forceReport) && WiFi.status() == WL_CONNECTED) {
+  if (changed || forceReport) {
+    reportPending = true;
+  }
+
+  if (reportPending && WiFi.status() == WL_CONNECTED) {
+    lastReportAttemptMs = millis();
     reportAppliedState();
   }
 }
@@ -288,9 +347,23 @@ bool performInitialSync() {
     return false;
   }
 
-  // After power restore, this pulls the last saved backend state and reapplies it.
+  // After power restore, fetch backend state again and restore both relays.
   applyDesiredState(nextRelay26, nextRelay27, true);
   return true;
+}
+
+void processPendingReport(unsigned long now) {
+  if (!reportPending || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  if (lastReportAttemptMs != 0 &&
+      now - lastReportAttemptMs < REPORT_RETRY_INTERVAL_MS) {
+    return;
+  }
+
+  lastReportAttemptMs = now;
+  reportAppliedState();
 }
 
 void ensureOnlineAndSynchronized() {
@@ -303,17 +376,22 @@ void ensureOnlineAndSynchronized() {
       return;
     }
 
-    performInitialSync();
-    lastHeartbeatMs = millis();
-    lastSyncMs = millis();
+    if (!performInitialSync()) {
+      return;
+    }
+
+    const unsigned long now = millis();
+    lastHeartbeatMs = now;
+    lastSyncMs = now;
     return;
   }
 
   const unsigned long now = millis();
 
   if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
-    pingDevice();
-    lastHeartbeatMs = now;
+    if (pingDevice()) {
+      lastHeartbeatMs = now;
+    }
   }
 
   if (now - lastSyncMs >= SYNC_INTERVAL_MS) {
@@ -322,10 +400,11 @@ void ensureOnlineAndSynchronized() {
 
     if (fetchDesiredState(nextRelay26, nextRelay27)) {
       applyDesiredState(nextRelay26, nextRelay27, false);
+      lastSyncMs = now;
     }
-
-    lastSyncMs = now;
   }
+
+  processPendingReport(now);
 }
 
 void setup() {
@@ -339,9 +418,11 @@ void setup() {
   applyRelayOutputs(false, false);
 
   connectToWiFi();
+
   if (WiFi.status() == WL_CONNECTED) {
-    registerDevice();
-    performInitialSync();
+    if (registerDevice()) {
+      performInitialSync();
+    }
   }
 }
 
