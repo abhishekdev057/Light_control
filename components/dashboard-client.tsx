@@ -7,11 +7,24 @@ import { ADMIN_TOKEN_STORAGE_KEY } from "@/lib/constants";
 import {
   fetchDashboardState,
   postRelayGroup,
+  postRelaySchedule,
   postRelayState,
 } from "@/lib/client/dashboard-api";
-import type { DashboardStateResponse } from "@/lib/types";
+import type {
+  DashboardStateResponse,
+  RelayScheduleSummary,
+} from "@/lib/types";
 
 type RelayNumber = "26" | "27";
+
+type ScheduleDraft = {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+};
+
+type ScheduleDraftState = Record<RelayNumber, ScheduleDraft>;
 
 const fallbackSnapshot: DashboardStateResponse = {
   success: true,
@@ -25,7 +38,61 @@ const fallbackSnapshot: DashboardStateResponse = {
   updatedAt: "",
   reportedAt: null,
   storageMode: "memory",
+  relay26Source: "manual",
+  relay27Source: "manual",
+  relay26OverrideUntil: null,
+  relay27OverrideUntil: null,
+  relay26Schedule: {
+    enabled: false,
+    startTime: "18:00",
+    endTime: "21:00",
+    timezone: "Asia/Kolkata",
+    updatedAt: "",
+    active: false,
+    nextTransitionAt: null,
+    overrideUntil: null,
+    controlSource: "manual",
+  },
+  relay27Schedule: {
+    enabled: false,
+    startTime: "18:00",
+    endTime: "21:00",
+    timezone: "Asia/Kolkata",
+    updatedAt: "",
+    active: false,
+    nextTransitionAt: null,
+    overrideUntil: null,
+    controlSource: "manual",
+  },
 };
+
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata";
+  } catch {
+    return "Asia/Kolkata";
+  }
+}
+
+function buildScheduleDrafts(
+  snapshot: DashboardStateResponse,
+  fallbackTimeZone: string,
+): ScheduleDraftState {
+  return {
+    "26": {
+      enabled: snapshot.relay26Schedule.enabled,
+      startTime: snapshot.relay26Schedule.startTime || "18:00",
+      endTime: snapshot.relay26Schedule.endTime || "21:00",
+      timezone: snapshot.relay26Schedule.timezone || fallbackTimeZone,
+    },
+    "27": {
+      enabled: snapshot.relay27Schedule.enabled,
+      startTime: snapshot.relay27Schedule.startTime || "18:00",
+      endTime: snapshot.relay27Schedule.endTime || "21:00",
+      timezone: snapshot.relay27Schedule.timezone || fallbackTimeZone,
+    },
+  };
+}
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -86,6 +153,18 @@ function describeRelay(value: boolean | null) {
   return value ? "ON" : "OFF";
 }
 
+function describeSource(source: DashboardStateResponse["relay26Source"]) {
+  if (source === "manual-override") {
+    return "Manual override";
+  }
+
+  if (source === "schedule") {
+    return "Schedule";
+  }
+
+  return "Manual";
+}
+
 function SurfaceCard({
   children,
   className = "",
@@ -143,12 +222,16 @@ function RelayCard({
   relay,
   desired,
   reported,
+  source,
+  schedule,
   disabled,
   onToggle,
 }: Readonly<{
   relay: RelayNumber;
   desired: boolean;
   reported: boolean | null;
+  source: DashboardStateResponse["relay26Source"];
+  schedule: RelayScheduleSummary;
   disabled: boolean;
   onToggle: (nextState: boolean) => void;
 }>) {
@@ -185,9 +268,26 @@ function RelayCard({
         />
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatePill label="Control source" value={describeSource(source)} tone="neutral" />
+        <StatePill
+          label="Schedule"
+          value={
+            schedule.enabled
+              ? `${schedule.startTime} - ${schedule.endTime}`
+              : "Disabled"
+          }
+          tone={schedule.enabled ? "accent" : "neutral"}
+        />
+      </div>
+
       <div className="rounded-[24px] border border-line/80 bg-background/55 p-3">
         <p className="text-xs uppercase tracking-[0.24em] text-foreground/45">
           Toggle state
+        </p>
+        <p className="mt-2 text-sm leading-6 text-foreground/65">
+          When scheduling is enabled, these buttons create a manual override until
+          the next schedule transition.
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
@@ -220,9 +320,133 @@ function RelayCard({
   );
 }
 
+function ScheduleEditorCard({
+  relay,
+  draft,
+  schedule,
+  disabled,
+  onDraftChange,
+  onSave,
+}: Readonly<{
+  relay: RelayNumber;
+  draft: ScheduleDraft;
+  schedule: RelayScheduleSummary;
+  disabled: boolean;
+  onDraftChange: (patch: Partial<ScheduleDraft>) => void;
+  onSave: () => void;
+}>) {
+  return (
+    <SurfaceCard className="flex h-full flex-col gap-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm uppercase tracking-[0.28em] text-foreground/45">
+            Relay {relay} schedule
+          </p>
+          <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
+            Admin timer window
+          </h2>
+        </div>
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] ${
+            schedule.enabled
+              ? schedule.active
+                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                : "bg-sky-500/12 text-sky-700 dark:text-sky-300"
+              : "bg-black/5 text-foreground/65 dark:bg-white/8"
+          }`}
+        >
+          {schedule.enabled ? (schedule.active ? "Window active" : "Window idle") : "Disabled"}
+        </span>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatePill
+          label="Next transition"
+          value={formatDateTime(schedule.nextTransitionAt)}
+          tone={schedule.enabled ? "accent" : "neutral"}
+        />
+        <StatePill
+          label="Override until"
+          value={formatDateTime(schedule.overrideUntil)}
+          tone={schedule.overrideUntil ? "warn" : "neutral"}
+        />
+      </div>
+
+      <div className="grid gap-4 rounded-[24px] border border-line/80 bg-background/55 p-4">
+        <label className="flex items-center justify-between gap-3 rounded-2xl bg-panel/80 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold">Enable daily schedule</p>
+            <p className="text-xs text-foreground/60">
+              Relay follows this time window automatically.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(event) => onDraftChange({ enabled: event.target.checked })}
+            className="h-5 w-5 accent-[var(--accent)]"
+          />
+        </label>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2">
+            <span className="text-sm font-medium text-foreground/70">Start time</span>
+            <input
+              type="time"
+              value={draft.startTime}
+              onChange={(event) => onDraftChange({ startTime: event.target.value })}
+              className="rounded-2xl border border-line bg-background/70 px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15"
+            />
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-sm font-medium text-foreground/70">End time</span>
+            <input
+              type="time"
+              value={draft.endTime}
+              onChange={(event) => onDraftChange({ endTime: event.target.value })}
+              className="rounded-2xl border border-line bg-background/70 px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15"
+            />
+          </label>
+        </div>
+
+        <label className="grid gap-2">
+          <span className="text-sm font-medium text-foreground/70">Timezone</span>
+          <input
+            type="text"
+            value={draft.timezone}
+            onChange={(event) => onDraftChange({ timezone: event.target.value })}
+            placeholder="Asia/Kolkata"
+            className="rounded-2xl border border-line bg-background/70 px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15"
+          />
+        </label>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <StatePill label="Current source" value={describeSource(schedule.controlSource)} />
+          <StatePill label="Saved window" value={`${schedule.startTime} - ${schedule.endTime}`} />
+          <StatePill label="Saved zone" value={schedule.timezone} />
+        </div>
+
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={disabled}
+          className="rounded-full bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Save relay {relay} schedule
+        </button>
+      </div>
+    </SurfaceCard>
+  );
+}
+
 export default function DashboardClient() {
+  const [browserTimeZone] = useState(getBrowserTimeZone);
   const [adminToken, setAdminToken] = useState("");
   const [snapshot, setSnapshot] = useState<DashboardStateResponse | null>(null);
+  const [scheduleDrafts, setScheduleDrafts] = useState<ScheduleDraftState>(
+    buildScheduleDrafts(fallbackSnapshot, browserTimeZone),
+  );
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [actionLabel, setActionLabel] = useState("");
@@ -243,6 +467,7 @@ export default function DashboardClient() {
           startTransition(() => {
             setSnapshot(nextSnapshot);
           });
+          setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
           setError("");
         } catch (caughtError) {
           setError(
@@ -253,7 +478,7 @@ export default function DashboardClient() {
         }
       })();
     }
-  }, []);
+  }, [browserTimeZone]);
 
   async function loadDashboard(tokenOverride?: string, silent = false) {
     const token = (tokenOverride ?? adminToken).trim();
@@ -275,6 +500,7 @@ export default function DashboardClient() {
       startTransition(() => {
         setSnapshot(nextSnapshot);
       });
+      setScheduleDrafts(buildScheduleDrafts(nextSnapshot, browserTimeZone));
       setError("");
 
       if (!silent) {
@@ -327,8 +553,14 @@ export default function DashboardClient() {
 
     try {
       await postRelayState(relay, token, nextState);
-      await loadDashboard(token, true);
-      setNotice(`Relay ${relay} updated successfully.`);
+      const refreshed = await loadDashboard(token, true);
+      setNotice(
+        refreshed &&
+          ((relay === "26" && refreshed.relay26Source === "manual-override") ||
+            (relay === "27" && refreshed.relay27Source === "manual-override"))
+          ? `Relay ${relay} updated. That manual state will hold until the next schedule change.`
+          : `Relay ${relay} updated successfully.`,
+      );
     } catch (caughtError) {
       startTransition(() => {
         setSnapshot(previous);
@@ -373,8 +605,14 @@ export default function DashboardClient() {
 
     try {
       await postRelayGroup(token, nextRelay26, nextRelay27);
-      await loadDashboard(token, true);
-      setNotice("Both relay states were updated.");
+      const refreshed = await loadDashboard(token, true);
+      setNotice(
+        refreshed &&
+          (refreshed.relay26Source === "manual-override" ||
+            refreshed.relay27Source === "manual-override")
+          ? "Both relays updated. Scheduled relays are now manually overridden until their next time boundary."
+          : "Both relay states were updated.",
+      );
     } catch (caughtError) {
       startTransition(() => {
         setSnapshot(previous);
@@ -389,10 +627,67 @@ export default function DashboardClient() {
     }
   }
 
+  async function saveSchedule(relay: RelayNumber) {
+    const token = adminToken.trim();
+
+    if (!token) {
+      setError("Enter the ADMIN_SECRET to save schedules.");
+      return;
+    }
+
+    const draft = scheduleDrafts[relay];
+    const timezone = draft.timezone.trim();
+
+    if (!timezone) {
+      setError("Timezone is required. Try Asia/Kolkata.");
+      return;
+    }
+
+    if (!draft.startTime || !draft.endTime) {
+      setError("Both schedule times are required.");
+      return;
+    }
+
+    if (draft.startTime === draft.endTime) {
+      setError("Start time and end time must be different.");
+      return;
+    }
+
+    setActionLabel(`Saving relay ${relay} schedule`);
+    setError("");
+    setNotice("");
+
+    try {
+      await postRelaySchedule(
+        relay,
+        token,
+        draft.enabled,
+        draft.startTime,
+        draft.endTime,
+        timezone,
+      );
+      await loadDashboard(token, true);
+      setNotice(
+        draft.enabled
+          ? `Relay ${relay} schedule saved. The backend will now switch it automatically between ${draft.startTime} and ${draft.endTime}.`
+          : `Relay ${relay} schedule disabled. Manual control is active now.`,
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : `Unable to save relay ${relay} schedule.`,
+      );
+    } finally {
+      setActionLabel("");
+    }
+  }
+
   function clearToken() {
     window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
     setAdminToken("");
     setSnapshot(null);
+    setScheduleDrafts(buildScheduleDrafts(fallbackSnapshot, browserTimeZone));
     setNotice("Stored admin token cleared from this browser.");
     setError("");
   }
@@ -410,12 +705,12 @@ export default function DashboardClient() {
                     Light Control Backend
                   </p>
                   <h1 className="mt-3 max-w-xl font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-                    HTTP relay control for an ESP32, ready for Vercel.
+                    HTTP relay control, daily scheduling, and reboot-safe sync for ESP32.
                   </h1>
                   <p className="mt-4 max-w-2xl text-base leading-7 text-foreground/70">
-                    Use the dashboard to set the desired state for GPIO 26 and 27,
-                    let the ESP32 poll the backend, and compare desired versus
-                    reported relay state in one place.
+                    The backend now drives relay timing centrally. Your ESP32 only
+                    polls the API, applies GPIO 26 and 27, and restores the saved
+                    state immediately after power comes back.
                   </p>
                 </div>
                 <div className="flex gap-3">
@@ -437,11 +732,7 @@ export default function DashboardClient() {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <StatePill
-                  label="Device"
-                  value={displaySnapshot.deviceId}
-                  tone="neutral"
-                />
+                <StatePill label="Device" value={displaySnapshot.deviceId} tone="neutral" />
                 <StatePill
                   label="Desired updated"
                   value={formatRelativeTime(displaySnapshot.updatedAt || null)}
@@ -563,6 +854,8 @@ export default function DashboardClient() {
           relay="26"
           desired={displaySnapshot.relay26Desired}
           reported={displaySnapshot.relay26Reported}
+          source={displaySnapshot.relay26Source}
+          schedule={displaySnapshot.relay26Schedule}
           disabled={!hasSnapshot || isBusy}
           onToggle={(nextState) => void updateSingleRelay("26", nextState)}
         />
@@ -571,6 +864,8 @@ export default function DashboardClient() {
           relay="27"
           desired={displaySnapshot.relay27Desired}
           reported={displaySnapshot.relay27Reported}
+          source={displaySnapshot.relay27Source}
+          schedule={displaySnapshot.relay27Schedule}
           disabled={!hasSnapshot || isBusy}
           onToggle={(nextState) => void updateSingleRelay("27", nextState)}
         />
@@ -652,22 +947,23 @@ export default function DashboardClient() {
               Device loop
             </p>
             <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-              Recommended ESP32 flow
+              Power restore behavior
             </h2>
           </div>
 
           <ol className="grid gap-3 text-sm leading-6 text-foreground/75">
             <li className="rounded-2xl bg-background/55 px-4 py-3">
-              1. Register once after Wi-Fi connects.
+              1. ESP32 boots with both relays in a safe default state.
             </li>
             <li className="rounded-2xl bg-background/55 px-4 py-3">
-              2. Ping every few seconds so the dashboard stays online.
+              2. It reconnects to Wi-Fi and registers again if needed.
             </li>
             <li className="rounded-2xl bg-background/55 px-4 py-3">
-              3. Poll <code>/api/device/sync</code> every 1-2 seconds.
+              3. It fetches <code>/api/device/sync</code> immediately after boot.
             </li>
             <li className="rounded-2xl bg-background/55 px-4 py-3">
-              4. Apply GPIO 26 and GPIO 27, then call <code>/api/device/report</code>.
+              4. The saved desired state is applied again, so manual or scheduled
+              state comes back after a power cut.
             </li>
           </ol>
 
@@ -678,6 +974,42 @@ export default function DashboardClient() {
             Open full endpoint examples
           </Link>
         </SurfaceCard>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <ScheduleEditorCard
+          relay="26"
+          draft={scheduleDrafts["26"]}
+          schedule={displaySnapshot.relay26Schedule}
+          disabled={!hasSnapshot || isBusy}
+          onDraftChange={(patch) =>
+            setScheduleDrafts((current) => ({
+              ...current,
+              "26": {
+                ...current["26"],
+                ...patch,
+              },
+            }))
+          }
+          onSave={() => void saveSchedule("26")}
+        />
+
+        <ScheduleEditorCard
+          relay="27"
+          draft={scheduleDrafts["27"]}
+          schedule={displaySnapshot.relay27Schedule}
+          disabled={!hasSnapshot || isBusy}
+          onDraftChange={(patch) =>
+            setScheduleDrafts((current) => ({
+              ...current,
+              "27": {
+                ...current["27"],
+                ...patch,
+              },
+            }))
+          }
+          onSave={() => void saveSchedule("27")}
+        />
       </section>
     </main>
   );

@@ -28,9 +28,9 @@ export async function GET(request: Request) {
 
   return jsonResponse<DeviceStateResponse>({
     success: true,
-    deviceId: desiredState.state.device.deviceId,
-    relay26: desiredState.state.desired.relay26,
-    relay27: desiredState.state.desired.relay27,
-    updatedAt: desiredState.state.desired.updatedAt,
+    deviceId: desiredState.deviceId,
+    relay26: desiredState.relay26,
+    relay27: desiredState.relay27,
+    updatedAt: desiredState.updatedAt,
   });
 }

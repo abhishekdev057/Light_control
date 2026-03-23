@@ -2,6 +2,7 @@ import type {
   DashboardStateResponse,
   ErrorResponse,
   RelayAllResponse,
+  RelayScheduleResponse,
   RelaySingleResponse,
 } from "@/lib/types";
 
@@ -79,4 +80,33 @@ export async function postRelayGroup(
   }
 
   return readJson<RelayAllResponse>(response);
+}
+
+export async function postRelaySchedule(
+  relay: "26" | "27",
+  adminToken: string,
+  enabled: boolean,
+  startTime: string,
+  endTime: string,
+  timezone: string,
+) {
+  const response = await fetch(`/api/schedule/${relay}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      adminToken,
+      enabled,
+      startTime,
+      endTime,
+      timezone,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  return readJson<RelayScheduleResponse>(response);
 }

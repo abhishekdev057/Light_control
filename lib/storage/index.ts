@@ -2,7 +2,11 @@ import { Redis } from "@upstash/redis";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { DEFAULT_DEVICE_ID, DEVICE_STATE_KEY } from "@/lib/constants";
+import {
+  DEFAULT_DEVICE_ID,
+  DEFAULT_SCHEDULE_TIMEZONE,
+  DEVICE_STATE_KEY,
+} from "@/lib/constants";
 import { getKvCredentials } from "@/lib/env";
 import { nowIso } from "@/lib/time";
 import type { PersistedDeviceState } from "@/lib/types";
@@ -37,6 +41,34 @@ function createDefaultState(): PersistedDeviceState {
       lastSeen: null,
       lastIp: null,
     },
+    schedules: {
+      relay26: {
+        enabled: false,
+        startTime: "18:00",
+        endTime: "21:00",
+        timezone: DEFAULT_SCHEDULE_TIMEZONE,
+        updatedAt: timestamp,
+      },
+      relay27: {
+        enabled: false,
+        startTime: "18:00",
+        endTime: "21:00",
+        timezone: DEFAULT_SCHEDULE_TIMEZONE,
+        updatedAt: timestamp,
+      },
+    },
+    overrides: {
+      relay26: {
+        state: null,
+        expiresAt: null,
+        updatedAt: null,
+      },
+      relay27: {
+        state: null,
+        expiresAt: null,
+        updatedAt: null,
+      },
+    },
   };
 }
 
@@ -63,6 +95,44 @@ function normalizeState(candidate: PersistedDeviceState | null | undefined) {
       registeredAt: candidate.device?.registeredAt ?? base.device.registeredAt,
       lastSeen: candidate.device?.lastSeen ?? base.device.lastSeen,
       lastIp: candidate.device?.lastIp ?? base.device.lastIp,
+    },
+    schedules: {
+      relay26: {
+        enabled: candidate.schedules?.relay26?.enabled ?? base.schedules.relay26.enabled,
+        startTime:
+          candidate.schedules?.relay26?.startTime ?? base.schedules.relay26.startTime,
+        endTime: candidate.schedules?.relay26?.endTime ?? base.schedules.relay26.endTime,
+        timezone:
+          candidate.schedules?.relay26?.timezone ?? base.schedules.relay26.timezone,
+        updatedAt:
+          candidate.schedules?.relay26?.updatedAt ?? base.schedules.relay26.updatedAt,
+      },
+      relay27: {
+        enabled: candidate.schedules?.relay27?.enabled ?? base.schedules.relay27.enabled,
+        startTime:
+          candidate.schedules?.relay27?.startTime ?? base.schedules.relay27.startTime,
+        endTime: candidate.schedules?.relay27?.endTime ?? base.schedules.relay27.endTime,
+        timezone:
+          candidate.schedules?.relay27?.timezone ?? base.schedules.relay27.timezone,
+        updatedAt:
+          candidate.schedules?.relay27?.updatedAt ?? base.schedules.relay27.updatedAt,
+      },
+    },
+    overrides: {
+      relay26: {
+        state: candidate.overrides?.relay26?.state ?? base.overrides.relay26.state,
+        expiresAt:
+          candidate.overrides?.relay26?.expiresAt ?? base.overrides.relay26.expiresAt,
+        updatedAt:
+          candidate.overrides?.relay26?.updatedAt ?? base.overrides.relay26.updatedAt,
+      },
+      relay27: {
+        state: candidate.overrides?.relay27?.state ?? base.overrides.relay27.state,
+        expiresAt:
+          candidate.overrides?.relay27?.expiresAt ?? base.overrides.relay27.expiresAt,
+        updatedAt:
+          candidate.overrides?.relay27?.updatedAt ?? base.overrides.relay27.updatedAt,
+      },
     },
   } satisfies PersistedDeviceState;
 }

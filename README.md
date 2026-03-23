@@ -8,12 +8,16 @@ A full-stack Next.js App Router project for controlling an ESP32 with two relays
 - Desired state vs. reported state tracking
 - Device online/offline status using heartbeat timing
 - Token-based auth for both device and admin requests
+- Daily per-relay scheduling with admin-set start time, end time, and timezone
+- Manual relay buttons that temporarily override a running schedule until the next schedule boundary
+- Power-restore-safe ESP32 flow where the board fetches desired state again after boot
 - Vercel-friendly route handlers under `app/api`
 - Storage abstraction with three modes:
   - Upstash Redis via `KV_REST_API_URL` and `KV_REST_API_TOKEN`
   - Local JSON file storage during development
   - In-memory fallback when no persistent store is configured
 - ESP32 integration page at `/integration`
+- Single-file ESP32 firmware at `firmware/esp32_light_control/esp32_light_control.ino`
 
 ## Tech stack
 
@@ -38,7 +42,7 @@ NEXT_PUBLIC_APP_URL=https://your-project-name.vercel.app
 Notes:
 
 - `DEVICE_SECRET` secures ESP32 endpoints.
-- `ADMIN_SECRET` secures dashboard relay updates and dashboard state reads.
+- `ADMIN_SECRET` secures dashboard relay updates and schedule changes.
 - `KV_REST_API_URL` and `KV_REST_API_TOKEN` enable persistent hosted storage on Vercel-compatible Redis.
 - If Redis credentials are missing, local development uses `.data/device-state.json`.
 
@@ -76,6 +80,29 @@ npm run build
 - `POST /api/relay/26`
 - `POST /api/relay/27`
 - `POST /api/relay/all`
+- `POST /api/schedule/26`
+- `POST /api/schedule/27`
+
+## Scheduling behavior
+
+Each relay now has its own daily schedule:
+
+- `enabled`
+- `startTime`
+- `endTime`
+- `timezone`
+
+When a schedule is enabled:
+
+- Inside the schedule window, the relay target becomes `ON`
+- Outside the schedule window, the relay target becomes `OFF`
+- If the admin presses `ON` or `OFF`, that acts as a manual override until the next schedule transition
+
+Examples:
+
+- Schedule `18:00` to `21:00`: relay turns on at 6:00 PM and turns off at 9:00 PM
+- Admin turns it off at 7:30 PM: it stays off until 9:00 PM, then the schedule continues normally
+- Admin turns it on at 4:00 PM: it stays on until 6:00 PM, then the normal schedule takes over
 
 ## Request examples
 
@@ -135,7 +162,7 @@ Content-Type: application/json
 }
 ```
 
-### Set relay 26 from dashboard
+### Set relay 26 manually
 
 ```http
 POST /api/relay/26
@@ -147,6 +174,21 @@ Content-Type: application/json
 }
 ```
 
+### Save relay 26 schedule
+
+```http
+POST /api/schedule/26
+Content-Type: application/json
+
+{
+  "adminToken": "ADMIN_SECRET",
+  "enabled": true,
+  "startTime": "18:00",
+  "endTime": "21:00",
+  "timezone": "Asia/Kolkata"
+}
+```
+
 ### Read dashboard state
 
 ```http
@@ -154,16 +196,45 @@ GET /api/dashboard/state
 x-admin-token: ADMIN_SECRET
 ```
 
-## ESP32 flow
+## ESP32 firmware
 
-Recommended loop:
+The firmware file is:
 
-1. Connect to Wi-Fi.
-2. `POST /api/device/register` once after boot.
-3. `POST /api/device/ping` every few seconds.
-4. `GET /api/device/sync` every 1-2 seconds.
-5. Apply GPIO 26 and GPIO 27.
-6. `POST /api/device/report` after applying relay state.
+- `firmware/esp32_light_control/esp32_light_control.ino`
+
+What it does:
+
+1. Connects to Wi-Fi
+2. Registers with `/api/device/register`
+3. Immediately calls `/api/device/sync` after boot
+4. Applies relay 26 and relay 27 state
+5. Reports the applied state back
+6. Keeps pinging and syncing in the loop
+
+Important:
+
+- The firmware expects `BASE_URL` to be your deployed Vercel domain
+- It uses HTTPS with `WiFiClientSecure`
+- Set `RELAY_ACTIVE_HIGH` to `false` if your relay board is active LOW
+
+## Power cut and restore behavior
+
+State is preserved because the backend stores:
+
+- manual desired state
+- schedule configuration
+- temporary manual overrides
+- device reported state
+
+After ESP32 power returns:
+
+1. The board boots
+2. It reconnects to Wi-Fi
+3. It requests `/api/device/sync`
+4. The backend returns the current desired relay state
+5. The board applies it again
+
+That means the relays come back to the backend-controlled state even after a power cut.
 
 ## Vercel deployment
 
@@ -176,18 +247,19 @@ Recommended loop:
 
 After deploy:
 
-- Use the dashboard with the admin token.
-- Open `/integration` to copy exact URLs and JSON payloads for the ESP32.
+- Use the dashboard with the admin token
+- Open `/integration` to copy exact URLs and JSON payloads for the ESP32
+- Update the firmware `BASE_URL` value to your real deployed domain
 
 ## Storage behavior
 
-- Hosted production persistence should use `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
-- Development without Redis uses `.data/device-state.json`.
-- Production without Redis falls back to in-memory storage, which is not durable across cold starts.
+- Hosted production persistence should use `KV_REST_API_URL` and `KV_REST_API_TOKEN`
+- Development without Redis uses `.data/device-state.json`
+- Production without Redis falls back to in-memory storage, which is not durable across cold starts
 
 ## GitHub remote
 
-If you are pushing manually, the intended remote is:
+The configured remote is:
 
 ```bash
 git remote add origin git@github.com:abhishekdev057/Light_control.git

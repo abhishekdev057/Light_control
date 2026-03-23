@@ -50,8 +50,16 @@ export async function POST(
   return jsonResponse<RelaySingleResponse>({
     success: true,
     ...(relayKey === "relay26"
-      ? { relay26: state.desired.relay26 }
-      : { relay27: state.desired.relay27 }),
-    updatedAt: state.desired.updatedAt,
+      ? { relay26: state.resolved.relay26 }
+      : { relay27: state.resolved.relay27 }),
+    updatedAt: state.resolved.updatedAt,
+    source:
+      relayKey === "relay26"
+        ? state.resolved.relay26Source
+        : state.resolved.relay27Source,
+    overrideUntil:
+      relayKey === "relay26"
+        ? state.resolved.relay26OverrideUntil
+        : state.resolved.relay27OverrideUntil,
   });
 }

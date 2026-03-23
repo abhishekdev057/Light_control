@@ -28,8 +28,8 @@ export async function GET(request: Request) {
 
   return jsonResponse<DeviceSyncResponse>({
     ok: true,
-    r26: desiredState.state.desired.relay26,
-    r27: desiredState.state.desired.relay27,
-    ts: desiredState.state.desired.updatedAt,
+    r26: desiredState.relay26,
+    r27: desiredState.relay27,
+    ts: desiredState.updatedAt,
   });
 }

@@ -26,8 +26,12 @@ export async function POST(request: Request) {
 
   return jsonResponse<RelayAllResponse>({
     success: true,
-    relay26: state.desired.relay26,
-    relay27: state.desired.relay27,
-    updatedAt: state.desired.updatedAt,
+    relay26: state.resolved.relay26,
+    relay27: state.resolved.relay27,
+    updatedAt: state.resolved.updatedAt,
+    relay26Source: state.resolved.relay26Source,
+    relay27Source: state.resolved.relay27Source,
+    relay26OverrideUntil: state.resolved.relay26OverrideUntil,
+    relay27OverrideUntil: state.resolved.relay27OverrideUntil,
   });
 }
